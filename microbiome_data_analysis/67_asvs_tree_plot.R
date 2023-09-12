@@ -15,7 +15,7 @@ plot.asv = as.data.frame(plot.asv)
 bac.asv = subset_samples(bac.asv, Compartment=='Root'&Treatment=='LN')
 bac.asv1 = subset_taxa(bac.asv, taxa_names(bac.asv)%in%gsub('b', '', plot.asv$ASV))
 # plot phylogenetic tree 
-p0 <- ggtree(bac.asv1, layout="circular", branch.length='none', size=1, aes(color=Family)) +
+p0 = ggtree(bac.asv1, layout="circular", branch.length='none', size=1, aes(color=Family)) +
   geom_tiplab(size=1, show.legend = FALSE, hjust = -0.5)
 ggsave(p0, file = "./67asv-tree-draft1.pdf", width = 20, height = 20, units = "cm")
 # first column must have same name with tree tip
