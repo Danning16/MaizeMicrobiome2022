@@ -59,7 +59,7 @@ score.sites = scores(cap.bray.f.vst, display="sites",choice=c(1,2))
 df = cbind.data.frame(score.sites, as.data.frame(sample_data(f.vst.norm)))
 screeplot(cap.bray.f.vst, type="line")
 ev = eigenvals(cap.bray.f.vst) %>% summary() 
-percentage <- paste( c("CAP1", "CAP2"), "(", paste( as.character(round(ev[2,c(1,2)]*100,2)), "%", ")", sep=""), sep = "" )
+percentage = paste( c("CAP1", "CAP2"), "(", paste( as.character(round(ev[2,c(1,2)]*100,2)), "%", ")", sep=""), sep = "" )
 # plot 
 temp1 = ggplot(data= df, aes(x = CAP1, y = CAP2, shape = Compartment)) +
   geom_point(aes(fill=Treatment), color='black', alpha=0.5, size=3, stroke=0.1) +
@@ -84,7 +84,7 @@ ggsave(p, file = "./plots/constrained-ordination-all-samples-bacteria-fungi.pdf"
 ## statistic test
 library(RVAideMemoire)
 
-bray.dist <- phyloseq::distance(f.vst.norm, method = "bray") 
+bray.dist = phyloseq::distance(f.vst.norm, method = "bray") 
 # PERMANOVA test 
 # !!! when test for genotype, soil samples are excluded
 permanova = adonis2(as.matrix(bray.dist)~Compartment+
