@@ -12,6 +12,7 @@ library(FSA)
 library(lme4)
 library(rcompanion)
 library(viridis)
+# this basic analysis is the same for bacteria and fungi data
 
 mytheme = theme_bw() +
   theme(plot.margin = unit(c(1,1,1,1), "cm"), plot.title = element_text(size = 10),
@@ -118,7 +119,7 @@ write.table(adiv, file = "~/genotypes129/results/ITS/alpha_div/rarefied1000reads
 alphaDivPlot = function(alphaDivDF, plotFator1, plotFator2, levelsOrder, divIndex){
   print(divIndex)
   alphaDivDF$CompTre = paste(alphaDivDF[,plotFator1], alphaDivDF[,plotFator2], sep = "_")
-  #f <- reformulate(divIndex, response="CompTre")
+  #f = reformulate(divIndex, response="CompTre")
   f = as.formula(paste(divIndex, "CompTre", sep="~"))
   print(f)
   # Kruskal-Wallis test 
@@ -135,7 +136,6 @@ alphaDivPlot = function(alphaDivDF, plotFator1, plotFator2, levelsOrder, divInde
   label.dunn[, plotFator1] = factor(label.dunn[, plotFator1], levels = levelsOrder)
   print(label.dunn)
   alphaDivDF[, plotFator1] = factor(alphaDivDF[, plotFator1], levels = levelsOrder)
-  #print(head(alphaDivDF))
   # box plot
   temp = ggplot(data= alphaDivDF, aes_string(x = plotFator1, y = divIndex, color=plotFator2)) +
     geom_boxplot(outlier.colour = NA) +
@@ -168,12 +168,12 @@ bac.deseq = phyloseq_to_deseq2(ps.tree.filtered.abund, ~Block+Compartment)
 bac.deseq = estimateSizeFactors(bac.deseq, type="poscount")
 bac.vst = varianceStabilizingTransformation(bac.deseq, blind=F)   
 # REMOVE batch effects
-bac.vst$batch =as.factor(paste(bac.vst$Harvest.batch, bac.vst$Treatment.batch, sep = "_"))
+bac.vst$batch = as.factor(paste(bac.vst$Harvest.batch, bac.vst$Treatment.batch, sep = "_"))
 bac.vst$plotBatch = as.factor(paste(bac.vst$Block, bac.vst$Plot, sep = "_"))
-mm <- model.matrix(~Compartment, colData(bac.vst))
-mat <- limma::removeBatchEffect(assay(bac.vst), batch=bac.vst$plotBatch, 
+mm = model.matrix(~Compartment, colData(bac.vst))
+mat = limma::removeBatchEffect(assay(bac.vst), batch=bac.vst$plotBatch, 
                                 batch2 = bac.vst$batch, design=mm)
-assay(bac.vst) <- mat
+assay(bac.vst) = mat
 bac.vst.norm = ps.tree.filtered.abund
 otu_table(bac.vst.norm) = otu_table(assay(bac.vst), taxa_are_rows = T)
 # save normalized ASV file after removing batch effects
