@@ -1,0 +1,169 @@
+---
+title: "microbiome_PCA_analysis"
+author: "Meng Li"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(tidyverse)
+library(vegan)
+library(geosphere)
+library(purrr)
+
+```
+
+## This script is code for performting PCA analysis of microbiome for every combinaiton of treatment, compartment, and biome type. The extracted PC scores were used in the RandomForest analysis.
+
+## read landrace data 
+
+```{r read}
+library(readxl)
+
+#--read sample info--#
+sample <- read_excel("Raw data/sample info.xlsx")
+
+sample_info <- sample %>% mutate(sample_id = paste0('X',ID)) %>% 
+    filter(Germpasm == 'Landrace') %>% 
+    dplyr::select(sample_id,Accession, Latitude,Longitude, Elevation) %>% 
+    arrange(sample_id)
+
+sample_id <- sample_info$sample_id
+
+```
+
+## Compute PCA for each separate treatmenet  
+
+```{r pca}
+# data files to be used: all ASV raw data files
+#file.list <- list.files('Raw data/ASV') 
+#file.list
+#[1] "BLUEs_Bacteria_ASVs_rhizosphere.xlsx" "BLUEs_Bacteria_ASVs_root.xlsx"        "BLUEs_Fungi_ASVs_rhizosphere.xlsx"   
+#[4] "BLUEs_Fungi_ASVs_root.xlsx"
+
+library(factoextra)
+
+# names of different components
+biome = c('Bacteria','Fungi')
+pos = c('root','rhizosphere')
+trt = c('CK','D','LN','LP')
+
+# prepare data
+test.fun <- function(biome,pos,trt) {
+    data = filter(read_excel(paste0('Raw data/ASV/BLUEs_',biome,'_ASVs_',pos,'.xlsx'),sheet = paste0(biome,'_',pos,'_',trt)), Genotype %in% sample_id) %>% arrange(sample_id)
+    
+    Genotype <- data %>% dplyr::select(Genotype)
+    
+    ASV = data %>% dplyr::select(-Genotype)
+    mono<-apply(ASV,MARGIN=2,function(x) length(table(x))) # find ASV with a constant value
+    ASV.1<-ASV[,which(mono>1)] # remove
+    
+    dim_data <- length(ASV.1)
+    #compute PCA
+    res.pca <- prcomp(ASV.1, scale = TRUE)
+    #eig.val <- get_eigenvalue(res.pca)
+    #eig.val
+    
+    # PC scores to extract as a final product
+    pc_scores <- cbind.data.frame(Genotype, res.pca$x[,1:5]) %>% 
+        mutate(n_ASV = dim_data)
+    
+    # PC loadings to extract as a final product
+    #loading.val <-  as.data.frame(res.pca$rotation[,1:5])
+    #loading.val.1 <- loading.val %>% rownames_to_column(var = 'ASV')
+}
+
+pca_scores <- expand.grid(biome=biome,pos=pos, trt=trt) %>%
+    mutate(n = pmap(., .f = test.fun)) %>%
+    unnest(cols = n)
+
+write.csv(pca_scores, file = 'PCA/Microbiome_PC_1-5_scores.csv', row.names = FALSE)
+
+pca_loadings <- expand.grid(biome=biome,pos=pos, trt=trt) %>%
+    mutate(n = pmap(., .f = test.fun)) %>%
+    unnest(cols = n)
+
+write.csv(pca_loadings, file = 'PCA/Microbiome_PC_1-5_loadings.csv', row.names = FALSE)
+
+# pc loadings of selected pcs
+pc_layer<- c('Bacteria_rhizosphere_CK_PC1','Bacteria_rhizosphere_D_PC1',
+           'Bacteria_rhizosphere_CK_PC2','Bacteria_rhizosphere_D_PC2', 
+           'Bacteria_rhizosphere_LN_PC2','Bacteria_rhizosphere_LP_PC2',
+           'Fungi_rhizosphere_LP_PC2', 'Bacteria_rhizosphere_LN_PC3',
+           'Fungi_rhizosphere_LP_PC3', 'Bacteria_rhizosphere_LP_PC4',
+           'Bacteria_rhizosphere_D_PC5')
+
+pca_loadings_sl <- pca_loadings %>% 
+  pivot_longer(names_to = 'PC', values_to = 'loading', cols = PC1:PC5) %>%
+  mutate(PCs = paste(biome,pos,trt,PC, sep='_')) %>%
+  filter(PCs %in% pc_layer) %>%
+  dplyr::select(PCs, ASV, loading) %>%
+  arrange(PCs)
+
+write.csv(pca_loadings_sl, file = 'ASV_loadings_on_selected_PC.csv')
+
+#draw plots
+plot.fun <- function(biome,pos,trt) {
+    data = filter(read_excel(paste0('Raw data/ASV/BLUEs_',biome,'_ASVs_',pos,'.xlsx'),sheet = paste0(biome,'_',pos,'_',trt)), Genotype %in% sample_id) %>% arrange(sample_id)
+    
+    Genotype <- data %>% dplyr::select(Genotype)
+    
+    ASV = data %>% dplyr::select(-Genotype)
+    mono<-apply(ASV,MARGIN=2,function(x) length(table(x))) # find ASV with a constant value
+    ASV.1<-ASV[,which(mono>1)] # remove
+    
+    #dim_data <- length(ASV.1)
+    #compute PCA
+    res.pca <- prcomp(ASV.1, scale = TRUE)
+    #eig.val <- get_eigenvalue(res.pca)
+    #eig.val
+    
+    plot <- fviz_pca_ind(res.pca, axes = c(1,2), repel = TRUE) +
+    labs(title = paste0(biome,'_',pos,'_',trt)) +
+    theme_update(
+    #axis.line = element_line(colour = "black", size=0.5), #axis.line or not
+    axis.line = element_blank(), # y axis is blank
+    #axis.line.x=element_line(colour="black",size=0.5),
+    #axis.line.y=element_line(colour="black",size=0.5),
+    #panel.border = element_line(colour="black",size=0.5),
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(),
+    axis.text.y = element_text(size=5,hjust=1,angle=0,face = 'bold',family = 'sans'), #hjust=0,alignment to the left;hjust=1,alignment from the right
+    #axis.ticks.x = element_line,
+    axis.text.x = element_text(size=5, color = "black",face = 'bold',family = 'sans'), #x axis
+    #axis.text.x = element_blank(),
+    axis.title.y = element_text(hjust=0.5,vjust=1,size=5,face = 'bold',family = 'sans'), #hjust=the distance from the left side; vjust=the distance from the x axis
+    #strip.text = element_text(size=15),
+    axis.title.x = element_text(hjust=0.5,vjust=0.5,size=5,face = 'bold',family = 'sans'),
+    legend.title = element_blank(),
+    #legend.title.align=1,
+    legend.position= 'right',
+    #legend.position = c(0.7, 0.2), #x, y
+    #legend.direction="horizontal",
+    legend.text=element_text(size=5, face = 'bold',family = 'sans'),
+    #legend.key = element_rect(color = NA, fill = NA),
+    legend.key.size = unit(0.4, "cm"),
+    plot.title=element_text(size=5, face = 'bold',family = 'sans', vjust = 1.5), #face="italic" size=18,hjust = 0.5
+    panel.border = element_rect(colour = "black", fill=NA, size=0.5),
+    plot.margin = unit(c(1,0.5,0.5,0.5), "lines") #margin:top,right,bottom,left
+  )
+
+ggsave(plot, filename = paste0('PCA/',biome,'_',pos,'_',trt,'_pc1vs2.pdf'),width =12,height = 8, units = 'cm')
+}
+
+pca_comb <- expand.grid(biome=biome,pos=pos, trt=trt) 
+pmap(pca_comb, .f = plot.fun)
+
+# merge pdfs
+file_list <- list.files("PCA","pc1vs2.pdf", full.names = TRUE)
+file_list
+
+library(pdftools)
+pdf_combine(file_list)
+
+```

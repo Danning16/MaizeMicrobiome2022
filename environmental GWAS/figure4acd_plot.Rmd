@@ -1,0 +1,345 @@
+---
+title: "Figure 4a-c"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(vegan)
+library(geosphere)
+library(purrr)
+library(karyoploteR)
+library(circlize)
+library(qqman)
+library(raster)
+library(rworldmap)
+library(ggplot2)
+library(ggsignif)
+library(ggpubr)
+library(rstatix)
+library(tibble)
+
+```
+
+# Calibrate GWAS results based on Francois et al, 2016 (doi: 10.1111/mec.13513)
+
+```{r calibrate}
+# filtered SNPs
+load('data/cimmyt_SNP_ID_filtered_MAF0.01.Rimage')
+
+#-----only traits with significant candidates----#
+trait.list_reduce <- c('ASV37_bacteria_rhizosphere_CK','ASV37_bacteria_root_LN')
+
+q.level = 0.001 # FDR level
+
+# extract site names and combine into a single dataframe
+recalibrate <- function(x) { 
+
+df_filter <-read.csv(paste0('data/MAF_0.01_',x,'_pred_mexi_results.csv'))
+
+# z_score from linear models
+z.aov <- df_filter$z_score
+pv_env_z <- pchisq(z.aov^2, df = 1, lower = F)
+
+L = length(pv_env_z)
+    
+#Compute the genomic inflation factor 
+gif_z = median(z.aov^2)/qchisq(.5, df = 1) 
+
+#re-calibrate p-values 
+z_adj_p = pchisq(z.aov^2/gif_z, df = 1, lower = F)
+
+w_z = which(sort(z_adj_p) < q.level*(1:L)/L)
+candidates.aov = as.data.frame(order(z_adj_p)[w_z]) %>% mutate(candidate = 1)
+colnames(candidates.aov)[1] <- 'id'
+
+df_cali <- bind_cols(df_filter, as.data.frame(z_adj_p), id = 1:355033)
+
+df_cali.1 <- df_cali %>%
+  left_join(candidates.aov, by = 'id') %>%
+  dplyr::select(-id)
+
+#create containers for each datatype
+ASV <- df_cali.1 %>%
+  dplyr::select(SNP, CHR,BP,P,bf_adj,z_adj_p, candidate) %>%
+  mutate(trait = paste(x)) 
+
+}
+
+data_p_ASV<-lapply(trait.list_reduce, recalibrate)
+
+# row bind dataframes
+ASV_calibrate <-do.call(bind_rows,data_p_ASV) 
+
+ASV_7_37_calibrate <- ASV_calibrate %>% filter(trait %in% c('ASV37_bacteria_root_LN','ASV7_bacteria_rhizosphere_LN'))
+
+ASV_37_calibrate <- ASV_7_37_calibrate %>% filter(trait %in% 'ASV37_bacteria_root_LN')
+
+rm(data_p_ASV)
+
+```
+
+## Figure 4a
+prepare data for manhattan plot
+
+1. extract significant snps to highlight in manhattan plot
+```{r highlight}
+highlight_snps <- ASV_calibrate %>%
+    filter(candidate == 1 ) 
+
+# ASV37 
+highlight_37_root_LN <- ASV_7_37_calibrate %>% 
+  filter(candidate == 1 & (trait ==  'ASV37_bacteria_root_LN'))
+
+```
+
+2. kp plot for regions
+```{r kp}
+# genome information
+genome <- ASV_7_37_calibrate %>% 
+    filter(trait %in% c('ASV37_bacteria_root_LN')) %>%
+    group_by(CHR) %>%
+    summarise(Start = min(BP,na.rm = TRUE), Stop = max(BP, na.rm = TRUE))
+
+custom.genome <- toGRanges(data.frame(chr=genome$CHR, start=genome$Start,end= genome$Stop))
+
+# SNP information
+ASV_37_range <- toGRanges(data.frame(chr=ASV_37_calibrate$CHR,
+                                  start=ASV_37_calibrate$BP,
+                                  end=ASV_37_calibrate$BP,
+                                  trait= ASV_37_calibrate$trait,
+                                  pval=ASV_37_calibrate$P)) # use original p values
+
+# highlight SNP information ASV37 root LN
+highlight_ASV37_root_LN_range <- toGRanges(data.frame(chr=highlight_37_root_LN$CHR,
+                                  start=highlight_37_root_LN$BP,
+                                  end=highlight_37_root_LN$BP,
+                                  trait= highlight_37_root_LN$trait,
+                                  y=-log10(highlight_37_root_LN$P),
+                                  pval=highlight_37_root_LN$P))
+
+#----mahattan plot----#
+#pdf plot will be very large
+#pdf(file = paste0('Plot/',x,'.pdf'), width = 12, height = 8) 
+        pp<-getDefaultPlotParams(plot.type=4) # show default plot parameters
+        pp$topmargin <- 20
+        pp$rightmargin <- 0.03
+        pp$leftmargin <- 0.08
+        pp$bottommargin <- 10
+        pp$ideogramheight <- 0 # change it to a line
+        pp$data1inmargin <- 0 # the distance between x axis and the points
+
+#kp plot
+        kp.4 <- plotKaryotype(genome = custom.genome,plot.type=4,plot.params = pp) #cytobands = custom.cytobands,
+        
+        # all snps 
+        kpAddLabels(kp.4, labels = "-log10(P)", srt=90, pos=3, side = 'left', r0=0, r1=1, cex=1,label.margin = 0.06)
+        
+        kp.4 <- kpPlotManhattan(kp.4, data=ASV_37_range, r0=0, r1=1, 
+                              suggestive.col="white", genomewide.col = "white", points.cex = 0.5)
+        
+        kpAxis(kp.4, ymin=0, ymax=ceiling(kp.4$latest.plot$computed.values$ymax), cex = 1, r0=0) #ceiling: round to the nearest #,)
+        
+        # highlight significant ASV37 root LN snps
+        kpPoints(kp.4, data = highlight_ASV37_root_LN_range, pch=16, cex=0.5,col = 'tomato', 
+                 ymax=kp.4$latest.plot$computed.values$ymax, r0=0) 
+
+      #dev.off()
+
+```
+
+## Figure 4c
+
+Check the top hits in Zm00001d048945; LD plot
+
+1. load cimmyt genotypes, annotation
+
+```{r geno}
+load('data/cimmyt_genotype_file.Rimage')
+colm[colm ==3] <- NA
+
+cimmyt_ann_all <- read.csv('data/all_gene_annotation_with_cimmyt_2.5kb_long.csv', header = TRUE,row.names = 'X')
+
+# transpose for use in figure 3c 
+colm.t <- as.matrix(t(colm))
+
+```
+
+2.add SNPs to selected gene: cimmyt (from all gene annotation info)
+
+```{r SNP}
+# all snps in the region
+gene_snp <- cimmyt_ann_all %>% 
+        filter(GeneID == 'Zm00001d048945') 
+
+gene_snp_geno <- colm[intersect(row.names(colm),gene_snp$Site),] %>% rownames_to_column(var = 'Site')
+
+gene_snp_id <- gene_snp$Site
+
+```
+
+3. LD map using IntAssoPLot
+
+```{ld2}
+library(IntAssoPlot)
+library(genetics)
+
+#----p values for SNPs-----#
+ASV_37_snp_p <- ASV_7_37_calibrate %>% 
+    filter(trait == 'ASV37_bacteria_root_LN') %>%
+    filter(SNP %in% gene_snp$Site)
+
+ASV_37_association <- ASV_37_snp_p %>% 
+    dplyr::select(SNP, CHR,BP,P) %>%
+    dplyr::rename(Marker = SNP, Locus = CHR, Site = BP, p = P)
+
+#----LD heatmap gene----#
+g_ASV37 <- gene_snp_geno %>% 
+      dplyr::select('Site',any_of(ASV_7_37$SaID)) %>%
+      filter(Site %in% ASV_37_snp_p$SNP) %>%
+      column_to_rownames(var = 'Site') %>%
+      filter(if_any(everything(), purrr::negate(is.na))) %>% # filter rows with all NAs
+      t() 
+geno_ASV37 <- makeGenotypes(g_ASV37,convert = 1:ncol(g_ASV37), method = as.genotype.allele.count)
+
+# create a hapmap file from geno 
+ASV37_hapmap <- ASV_37_snp_p %>%
+    dplyr:::select(CHR,SNP,BP) %>%
+    dplyr::rename(Site = SNP) %>%
+    left_join(rownames_to_column(as.data.frame(t(geno_ASV37)),var = 'Site'), by = 'Site') %>%
+    dplyr::rename(`rs` = Site, chrom = CHR, pos = BP) %>%
+    mutate(allele = 'A/B', strand = NA, `assembly` = NA, center = NA, protLSID = NA, assayLSID = NA, panel = NA, QCcode=NA) %>%
+    dplyr::select(`rs`,allele, chrom, pos, strand, `assembly`, center, protLSID, assayLSID, panel, QCcode, SEEDGWAS1195:SEEDGWAS4784) %>%
+    mutate_at(vars(SEEDGWAS1195:SEEDGWAS4784), funs(case_when(
+        . == 'A/A' ~ 'AA',
+        . == 'A/B' ~ 'AB',
+        . == 'B/B' ~ 'BB'
+    ))) # need to change NA to "NN"
+
+which(is.na(ASV37_hapmap[,12:1767]), arr.ind=TRUE)
+#         row  col
+#[1,]  14  250
+#[2,]  10 1428
+ASV37_hapmap[,12:1767][14,250] <- 'NN'
+ASV37_hapmap[,12:1767][10,1428] <- 'NN'
+# double check
+#which(is.na(ASV37_hapmap[,12:1767]), arr.ind=TRUE)
+
+# read gene model infomation 
+gene_info<- read.table('data/Gene_Models_Chr4_10445794..10449110.gff3', header=FALSE)
+gene_info$V1 <- 4 #chr number to match association file
+
+# marker to highlight 
+ASV_37_marker_highlight <- ASV_37_association %>%
+    filter(p < 1e-19) %>%
+    dplyr::select(Marker, Locus, Site) %>%
+    dplyr::rename(rs = Marker, chrom = Locus, pos = Site) %>%
+    mutate(shape = 17, colour = 'red', fill = 'red', size = 2)
+
+# marker to label 
+ASV_37_marker_label <- ASV_37_association %>%
+    filter(p < 1e-19) %>%
+    dplyr::select(Marker, Locus, Site) %>%
+    dplyr::rename(rs = Marker, chrom = Locus, pos = Site) 
+
+#----plot the LD heatmap with gene models 
+IntGenicPlot('Zm00001d048945_T001', gene_info, association = ASV_37_association, 
+             hapmap = ASV37_hapmap, hapmap_ld = ASV37_hapmap, 
+             threshold = 8, thresholdlinecolour= 'white', up=500,down=500,leadsnpLD = FALSE, exon_colour = 'black',
+             colour02 = "lightgray", colour04 = "lightgoldenrodyellow", 
+             colour06 = "yellow", colour08 = "orange", colour10 = "red",
+             marker2highlight = ASV_37_marker_highlight,
+             marker2label=ASV_37_marker_label,marker2label_angle=0,marker2label_size=2.5)
+
+```
+
+## Figure 4d
+
+1. read taxa id
+```{r taxa_id}
+ASV_7_37 <- read.csv('Microbiome_mexi_ASV_7_37_RFprediction.csv', header = TRUE, na.strings = '')
+
+```
+
+2. load genotype data
+
+```{r geno}
+snp_geno <- as.data.frame(colm.t[, gene_snp_id]) %>%
+    rownames_to_column(var = 'SaID')
+
+# calculate MAF function
+getMAF <- function(m) colMeans(m, na.rm = TRUE) / 2 #this is calculating major allele for 0,1,2 genotypes
+
+```
+
+3. allele frequency in total N groups
+
+```{r MAF}
+# read environmental data for landraces and divide genotypes into 20 groups based on TN ####
+env_mexi_raw <- read.csv('data/Mexi_landrace_env', row.names = 'X')
+
+env_mexi_N <- env_mexi_raw %>% 
+    dplyr::select(SaID, TN) %>% 
+    arrange(TN)
+
+env_mexi_N$split <-cut(env_mexi_N$TN, 
+                   breaks=c(0.00, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90))
+
+# prepare data
+env_mexi_N.ASV <- env_mexi_N %>% 
+    left_join(ASV_7_37[,-c(2:4)], by = 'SaID') %>%
+    pivot_longer(names_to = 'ASV',values_to = 'Abundance', cols = ASV37_bacteria_rhizosphere_CK_pred:ASV7_bacteria_root_LN_pred) %>%
+    group_by(ASV, split) %>%
+    summarise(group_mean = mean(Abundance))
+
+env_mexi_N.data <- env_mexi_N %>%
+    left_join(snp_geno,by = 'SaID') %>%
+    column_to_rownames(var = 'SaID') %>%
+    group_by(split) %>%
+    nest() %>%
+    mutate(TN_mean = map(data, ~ mean(.$TN)),
+        df1 = map(data, ~ as.data.frame(1-getMAF(.[,-1])))) %>% # this is calculating minor allele frequency
+    #dplyr::select(id, df1) %>%
+    mutate(MAF = purrr::map(df1, ~ rownames_to_column(., var = "SNP"))) %>%
+    select(split,TN_mean, MAF) %>%
+    unnest(c(TN_mean,MAF)) %>%
+    left_join(env_mexi_N.ASV, by = 'split') %>%
+    as.data.frame()
+
+names(env_mexi_N.data)[4] <- 'MAF'
+```
+
+4. plot correlations
+
+```{r correlations}
+library(ggpubr)
+library(ggplot2)
+# focused SNP S4_10445603
+ASV37_root_LN_S4_10445603<-
+  ggplot(data=filter(env_mexi_N.data, ASV == 'ASV37_bacteria_root_LN_pred' & SNP == 'S4_10445603'), aes(x =MAF)) + 
+      geom_smooth(aes(y = TN_mean),method = 'lm',color="#E66100", se=TRUE, fill = "#E66100") +
+      geom_point(aes(y = TN_mean), color = "brown3") +
+      #stat_cor(aes(x=MAF, y =TN_mean),label.x = 0.1,label.y = 0.2) +
+      stat_cor(aes(x=MAF, y =TN_mean),label.x.npc = 0.1,label.y.npc = 0.1, color = 'brown3') +
+      geom_smooth(aes(y = (group_mean-65)/20), color = '#5D3A9B', method ='lm', se = TRUE,fill = '#5D3A9B') + #color = rgb(0.2, 0.6, 0.9, 1), 
+      geom_point( aes(y = (group_mean-65) /20), color = 'darkblue') + #,color = 'darkblue'
+      #facet_wrap(~SNP, scales = 'free', ncol = 3) +
+      stat_cor(aes(x=MAF, y = (group_mean-65)/20),label.x.npc = 0.6,label.y.npc = 0.9,color = 'darkblue') +
+      xlab('Allele frequency') +
+      labs(title = 'S4_10445603') +
+      scale_y_continuous(limits = c(0, 1),breaks = c(0,0.5,1), expand = c(0,0), name = 'Total nitrogen content (%)', #
+                         sec.axis = sec_axis(~.*20 + 65 , name = 'Relative abundance')) + #
+      theme_bw() +
+        theme(
+        axis.title.y = element_text(color = 'black', size=13),
+        axis.title.y.right = element_text(color = 'black', size=13),
+        axis.title.x = element_text(color = 'black', size=13),
+        axis.text = element_text(color = 'black', size=13),
+        panel.grid = element_blank()
+  ) 
+ASV37_root_LN_S4_10445603
+```

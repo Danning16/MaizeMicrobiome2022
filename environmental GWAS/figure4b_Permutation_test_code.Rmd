@@ -1,0 +1,160 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(data.table)
+library(dplyr)
+library(qqman)
+library(stringr)
+library(tidyr)
+library(GenomicRanges)
+library(ggplot2)
+library(readxl)
+
+#desktop:
+setwd('file_path')
+
+```
+
+## read phenotypic GWAS result data
+
+```{data}
+results <- read.csv('results_GWAS_ASV7_ASV37.csv', header = TRUE, fileEncoding="UTF-8-BOM")
+
+result_1 <- results %>% 
+    separate(SNP, c('X','BP'), sep = '_', remove = FALSE) %>%
+    mutate(CHR = str_remove(X, 'X')) %>%
+    dplyr::select(-X) %>%
+    mutate(CHR = as.numeric(CHR), BP = as.numeric(BP))
+
+```
+
+##Permutation test: select ASVs to focus on; check if Snps in the top predicted GWAS snps region are more significant than random
+
+ASV37_root_LN
+```{ASV}
+# ASV37_root_LN
+ASV37_root_LN <- result_1 %>%
+    dplyr::select(SNP, CHR, BP, ASV37_root_LN)
+
+ASV37_root_LN_100 <- result_1 %>%
+    dplyr::select(SNP, CHR, BP, ASV37_root_LN) %>%
+    filter(ASV37_root_LN <= nth(sort(ASV37_root_LN, decreasing = FALSE),100))
+
+ASV37_root_LN_pred <- read.csv('MAF_0.01_ASV37_bacteria_root_LN_pred_mexi_results.csv')
+
+ASV37_root_LN_pred_100 <- ASV37_root_LN_pred %>%
+    dplyr::select(SNP, CHR, BP, P) %>%
+    filter(P <= nth(sort(P, decreasing = FALSE),100))
+
+#top snps +/- 200kb
+ASV37_root_LN_100_snps <- ASV37_root_LN_100 %>%
+  arrange(CHR, BP) %>%
+  mutate(region_start = BP - 200000, region_stop = BP + 200000) # add +/- 200kb
+
+ASV37_root_LN_100_pred_snps <- ASV37_root_LN_pred_100 %>%
+  arrange(CHR, BP) %>%
+  mutate(region_start = BP - 200000, region_stop = BP + 200000) # add +/- 200kb
+
+#------ search pred SNPs in phenotypic GWAS SNP regions; didn't run --####
+# convert regions to a GRanges object
+ASV37_root_LN_100_GRanges <- makeGRangesFromDataFrame(ASV37_root_LN_100_snps,keep.extra.columns = TRUE,ignore.strand = TRUE,seqnames.field = 'CHR', start.field = 'region_start', end.field = 'region_stop')
+
+# convert pred dataframe to a GRanges object
+ASV37_root_LN_pred_GRanges <- makeGRangesFromDataFrame(ASV37_root_LN_pred, seqnames.field = 'CHR',keep.extra.columns = TRUE, ignore.strand = TRUE,start.field = 'BP',end.field = 'BP')
+
+# extract regions with at least one marker overlap: notice the order query first and subject second
+ASV37_root_LN_overlap <- as.data.frame(findOverlaps(ASV37_root_LN_pred_GRanges,ASV37_root_LN_100_GRanges, ignore.strand = TRUE))
+
+# extract pred markers that hit regions
+ASV37_root_LN_overlap.1 <- as.data.frame(ASV37_root_LN_pred_GRanges[ASV37_root_LN_overlap$queryHits]) %>%
+  dplyr::rename(CHR=seqnames, SNP_cimmyt = SNP) %>%
+  dplyr::select(-c(start,end,width,strand)) 
+
+ASV37_root_LN_overlap.1$CHR <- as.integer(ASV37_root_LN_overlap.1$CHR)
+
+# extract region
+ASV37_root_LN_overlap.2 <- as.data.frame(ASV37_root_LN_100_GRanges[ASV37_root_LN_overlap$subjectHits]) %>%
+  dplyr::rename(CHR = seqnames, region_start = start, region_end = end, region_width = width) %>%
+  dplyr::select(SNP, ASV37_root_LN, CHR,region_start, region_end, region_width) 
+
+ASV37_root_LN_overlap.2$CHR <- as.integer(ASV37_root_LN_overlap.2$CHR)
+
+#------ search phenotypic SNPs in pred GWAS SNP regions: ASV37 ####
+# convert regions to a GRanges object
+ASV37_root_LN_pred_100_GRanges <- makeGRangesFromDataFrame(ASV37_root_LN_100_pred_snps,keep.extra.columns = TRUE,ignore.strand = TRUE,seqnames.field = 'CHR', start.field = 'region_start', end.field = 'region_stop')
+
+# convert phenotypic SNP dataframe to a GRanges object
+ASV37_root_LN_GRanges <- makeGRangesFromDataFrame(ASV37_root_LN, seqnames.field = 'CHR',keep.extra.columns = TRUE, ignore.strand = TRUE,start.field = 'BP',end.field = 'BP')
+
+# extract regions with at least one marker overlap: notice the order query first and subject second
+ASV37_root_LN_overlap.3 <- as.data.frame(findOverlaps(ASV37_root_LN_GRanges,ASV37_root_LN_pred_100_GRanges, ignore.strand = TRUE))
+
+# extract pred markers that hit regions
+ASV37_root_LN_overlap.4 <- as.data.frame(ASV37_root_LN_GRanges[ASV37_root_LN_overlap.3$queryHits]) %>%
+  dplyr::rename(CHR=seqnames) %>%
+  dplyr::select(-c(start,end,width,strand)) 
+
+ASV37_root_LN_overlap.4$CHR <- as.integer(ASV37_root_LN_overlap.4$CHR)
+
+# extract region
+ASV37_root_LN_overlap.5 <- as.data.frame(ASV37_root_LN_pred_100_GRanges[ASV37_root_LN_overlap.3$subjectHits]) %>%
+  dplyr::rename(CHR = seqnames, region_start = start, region_end = end, region_width = width) %>%
+  dplyr::select(SNP, P, CHR,region_start, region_end, region_width) %>% 
+  dplyr::rename(SNP_cimmyt = SNP)
+
+ASV37_root_LN_overlap.5$CHR <- as.integer(ASV37_root_LN_overlap.5$CHR)
+
+#combine
+ASV37_root_LN_info.2 <- cbind.data.frame(
+  ASV37_root_LN_overlap.5[,c('SNP_cimmyt','CHR','region_start','region_end','region_width','P')], ASV37_root_LN_overlap.4[,-1]) %>%
+  unique()
+
+# ---------------------------test the P values------------------------#
+# container for output
+ASV37_median_test <- data.frame(random = numeric(),
+                          target = numeric())
+# subsampling and overlaps
+for(i in 1:9999) {
+      #subsample random genes from common gene pool: 100
+      subset_random <- sample(ASV37_root_LN$ASV37_root_LN, 4208, replace = FALSE, prob = NULL)
+    
+      #median of P values 
+      random_median <- median(subset_random)
+      
+      #median of SNP P values
+      target_median <- median(ASV37_root_LN_info.2$ASV37_root_LN)
+      
+      add <- data.frame(subset = paste0('subset',i),
+                        random = random_median, 
+                        target = target_median) 
+      
+      ASV37_median_test <- rbind(ASV37_median_test,add)
+} 
+
+ASV37_p_median_test <- ASV37_median_test %>%
+  summarize(p = 1- (length(which(random > target)) / 10000))
+
+ASV37_p <- ggplot(ASV37_median_test)+
+    geom_density(aes(x = random),size =1) +
+    geom_vline(aes(xintercept = 0.457), color = 'red', size =1) +
+    annotate('text', label = 'p < 0.0001',x= 0.465, y = 40, size = 5) +
+    labs(title = 'ASV37_root_LN') +
+    xlab('P values') +
+    ylab('Density') +
+      theme_bw() +
+        theme(
+        axis.title.y = element_text(color = 'black', size=13),
+        axis.title.x = element_text(color = 'black', size=13),
+        axis.text = element_text(color = 'black', size=11),
+        panel.grid = element_blank())
+
+ASV37_p
+
+```

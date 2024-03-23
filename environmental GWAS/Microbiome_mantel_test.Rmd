@@ -1,0 +1,329 @@
+---
+title: "Mantel test"
+output: html_document
+editor_options:
+  chunk_output_type: console
+---
+```{r setup}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(tidyverse)
+library(vegan)
+library(geosphere)
+library(purrr)
+
+```
+
+## This script is for testing correlations between microbial communities and local environments. Supplementary Figure 23.
+
+## Read landrace data 
+
+```{r read}
+library(readxl)
+
+#--read sample info--#
+sample <- read_excel("Raw data/sample info.xlsx")
+
+sample_info <- sample %>% mutate(sample_id = paste0('X',ID)) %>% 
+    filter(Germpasm == 'Landrace') %>% 
+    dplyr::select(sample_id,Accession, Latitude,Longitude, Elevation) %>% 
+    arrange(sample_id)
+
+sample_id <- sample_info$sample_id
+
+```
+
+## Mantel test: test pairwise correlations between treatments, elevation, and geodistances
+
+compute distance matrix
+```{r mantel}
+#environmental vector
+elevation = sample_info$Elevation
+
+#longitude and latitude 
+geo = data.frame(sample_info$Longitude, sample_info$Latitude)
+
+#environmental vector - euclidean distance
+dist.env = dist(elevation, method = "euclidean")
+
+#geographic data frame - haversine distance 
+d.geo = distm(geo, fun = distHaversine)
+dist.geo = as.dist(d.geo)
+
+```
+
+loop through datasets and compute correlations
+
+```{r loop}
+# files in the folder to be looped 
+#file.list <- list.files('Raw data/ASV')
+#file.list
+#[1] "BLUEs_Bacteria_ASVs_rhizosphere.xlsx" "BLUEs_Bacteria_ASVs_root.xlsx"        "BLUEs_Fungi_ASVs_rhizosphere.xlsx"   
+#[4] "BLUEs_Fungi_ASVs_root.xlsx"
+
+# dataset list
+data.list <-  c('CK','D','LN','LP')
+data_comb <- expand.grid(data.list,data.list)
+
+data_env <- cbind.data.frame(Var1 = c('CK','D','LN','LP'),
+                  Var2 = rep('Elevation',4))
+
+data_geo <- cbind.data.frame(Var1 = c('CK','D','LN','LP'),
+                  Var2 = rep('Geographic_dist',4))
+
+# calculate distance matrix: euclidean
+biome = c('Bacteria','Fungi')
+pos = c('root','rhizosphere')
+trt = c('CK','D','LN','LP')
+
+dist.fun <- function(biome,pos,trt) {
+    data = filter(read_excel(paste0('Raw data/ASV/BLUEs_',biome,'_ASVs_',pos,'.xlsx'),sheet = paste0(biome,'_',pos,'_',trt)), Genotype %in% sample_id) %>% arrange(sample_id)
+    
+    Genotype <- data %>% dplyr::select(Genotype)
+    
+    ASV = data %>% dplyr::select(-Genotype)
+    mono<-apply(ASV,MARGIN=2,function(x) length(table(x))) # find ASV with a constant value
+    ASV.1<-ASV[,which(mono>1)] # remove
+    
+    abund.dist =vegdist(ASV.1, method = 'euclidean')
+    
+}
+
+dist.list <- expand.grid(biome=biome,pos=pos, trt=trt) %>%
+    mutate(abund.dist = pmap(., .f = dist.fun)) %>%
+    mutate(comb = paste(biome,pos,sep = '_')) 
+
+#-----mantel test-----#
+
+#---bacteria rhizosphere---#
+bac_rhizo.list <- dist.list %>% filter(comb == 'Bacteria_rhizosphere')
+
+models <- list()
+for (i in 1:nrow(data_comb)) {
+        # extract dist datasets
+        dist.1 = (bac_rhizo.list %>% filter(trt == data_comb[i,]$Var1) %>% dplyr::select(abund.dist))$abund.dist[[1]]
+        dist.2 = (bac_rhizo.list %>% filter(trt == data_comb[i,]$Var2) %>% dplyr::select(abund.dist))$abund.dist[[1]]
+        
+        #run mantel
+        model = mantel(dist.1, dist.2, method = "spearman", permutations = 999, na.rm = TRUE)
+        
+        # extract coef and p
+        g = cbind(coef=model$statistic, p=model$signif)
+        
+        g_1 <- cbind(data_comb[i,], g)
+        models[[i]] <- g_1
+}
+bac_rhizo.mantel <- do.call(bind_rows, models) 
+
+# elevation vs. community
+models_env <- list()
+for (i in 1:nrow(data_env)) {
+        dist.1 = (bac_rhizo.list %>% filter(trt == data_comb[i,]$Var1) %>% dplyr::select(abund.dist))$abund.dist[[1]]
+        
+        model = mantel(dist.1, dist.env, method = "spearman", permutations = 999, na.rm = TRUE)
+        
+        g = cbind(coef=model$statistic, p=model$signif)
+        
+        g_1 <- cbind(data_env[i,], g)
+        models_env[[i]] <- g_1
+}
+bac_rhizo.env <- do.call(bind_rows, models_env) 
+
+# geo_distance vs. community
+models_geo <- list()
+for (i in 1:nrow(data_geo)) {
+        dist.1 = (bac_rhizo.list %>% filter(trt == data_comb[i,]$Var1) %>% dplyr::select(abund.dist))$abund.dist[[1]]
+        
+        model = mantel(dist.1, dist.geo, method = "spearman", permutations = 999, na.rm = TRUE)
+        
+        g = cbind(coef=model$statistic, p=model$signif)
+        
+        g_1 <- cbind(data_geo[i,], g)
+        models_geo[[i]] <- g_1
+}
+bac_rhizo.geo <- do.call(bind_rows, models_geo) 
+
+bac_rhizo.comb <- rbind.data.frame(bac_rhizo.mantel,bac_rhizo.env,bac_rhizo.geo)
+
+#---bacteria root---#
+bac_root.list <- dist.list %>% filter(comb == 'Bacteria_root')
+
+models <- list()
+
+for (i in 1:nrow(data_comb)) {
+        dist.1 = (bac_root.list %>% filter(trt == data_comb[i,]$Var1) %>% dplyr::select(abund.dist))$abund.dist[[1]]
+        dist.2 = (bac_root.list %>% filter(trt == data_comb[i,]$Var2) %>% dplyr::select(abund.dist))$abund.dist[[1]]
+        
+        model = mantel(dist.1, dist.2, method = "spearman", permutations = 999, na.rm = TRUE)
+       
+        g = cbind(coef=model$statistic, p=model$signif)
+        
+        g_1 <- cbind(data_comb[i,], g)
+        models[[i]] <- g_1
+}
+
+bac_root.mantel <- do.call(bind_rows, models)
+
+models_env <- list()
+for (i in 1:nrow(data_env)) {
+        dist.1 = (bac_root.list %>% filter(trt == data_comb[i,]$Var1) %>% dplyr::select(abund.dist))$abund.dist[[1]]
+        
+        model = mantel(dist.1, dist.env, method = "spearman", permutations = 999, na.rm = TRUE)
+        
+        g = cbind(coef=model$statistic, p=model$signif)
+        
+        g_1 <- cbind(data_env[i,], g)
+        models_env[[i]] <- g_1
+}
+bac_root.env <- do.call(bind_rows, models_env) 
+
+models_geo <- list()
+for (i in 1:nrow(data_geo)) {
+        dist.1 = (bac_root.list %>% filter(trt == data_comb[i,]$Var1) %>% dplyr::select(abund.dist))$abund.dist[[1]]
+        
+        model = mantel(dist.1, dist.geo, method = "spearman", permutations = 999, na.rm = TRUE)
+        
+        g = cbind(coef=model$statistic, p=model$signif)
+        
+        g_1 <- cbind(data_geo[i,], g)
+        models_geo[[i]] <- g_1
+}
+bac_root.geo <- do.call(bind_rows, models_geo) 
+
+bac_root.comb <- rbind.data.frame(bac_root.mantel,bac_root.env,bac_root.geo)
+
+#---fungi rhizosphere---#
+fungi_rhizo.list <- dist.list %>% filter(comb == 'Fungi_rhizosphere')
+
+models <- list()
+
+for (i in 1:nrow(data_comb)) {
+        dist.1 = (fungi_rhizo.list %>% filter(trt == data_comb[i,]$Var1) %>% dplyr::select(abund.dist))$abund.dist[[1]]
+        dist.2 = (fungi_rhizo.list %>% filter(trt == data_comb[i,]$Var2) %>% dplyr::select(abund.dist))$abund.dist[[1]]
+        
+        model = mantel(dist.1, dist.2, method = "spearman", permutations = 999, na.rm = TRUE)
+        
+        g = cbind(coef=model$statistic, p=model$signif)
+        
+        g_1 <- cbind(data_comb[i,], g)
+        models[[i]] <- g_1
+}
+
+fungi_rhizo.mantel <- do.call(bind_rows, models)
+
+models_env <- list()
+for (i in 1:nrow(data_env)) {
+        dist.1 = (fungi_rhizo.list %>% filter(trt == data_comb[i,]$Var1) %>% dplyr::select(abund.dist))$abund.dist[[1]]
+        
+        model = mantel(dist.1, dist.env, method = "spearman", permutations = 999, na.rm = TRUE)
+        
+        g = cbind(coef=model$statistic, p=model$signif)
+        
+        g_1 <- cbind(data_env[i,], g)
+        models_env[[i]] <- g_1
+}
+fungi_rhizo.env <- do.call(bind_rows, models_env) 
+
+models_geo <- list()
+for (i in 1:nrow(data_geo)) {
+        dist.1 = (fungi_rhizo.list %>% filter(trt == data_comb[i,]$Var1) %>% dplyr::select(abund.dist))$abund.dist[[1]]
+        
+        model = mantel(dist.1, dist.geo, method = "spearman", permutations = 999, na.rm = TRUE)
+        
+        g = cbind(coef=model$statistic, p=model$signif)
+        
+        g_1 <- cbind(data_geo[i,], g)
+        models_geo[[i]] <- g_1
+}
+fungi_rhizo.geo <- do.call(bind_rows, models_geo) 
+
+fungi_rhizo.comb <- rbind.data.frame(fungi_rhizo.mantel,fungi_rhizo.env,fungi_rhizo.geo)
+
+#---fungi root---#
+fungi_root.list <- dist.list %>% filter(comb == 'Fungi_root')
+
+models <- list()
+
+for (i in 1:nrow(data_comb)) {
+        dist.1 = (fungi_root.list %>% filter(trt == data_comb[i,]$Var1) %>% dplyr::select(abund.dist))$abund.dist[[1]]
+        dist.2 = (fungi_root.list %>% filter(trt == data_comb[i,]$Var2) %>% dplyr::select(abund.dist))$abund.dist[[1]]
+        
+        model = mantel(dist.1, dist.2, method = "spearman", permutations = 999, na.rm = TRUE)
+        
+        g = cbind(coef=model$statistic, p=model$signif)
+        
+        g_1 <- cbind(data_comb[i,], g)
+        models[[i]] <- g_1
+}
+
+fungi_root.mantel <- do.call(bind_rows, models)
+
+models_env <- list()
+for (i in 1:nrow(data_env)) {
+        dist.1 = (fungi_root.list %>% filter(trt == data_comb[i,]$Var1) %>% dplyr::select(abund.dist))$abund.dist[[1]]
+        
+        model = mantel(dist.1, dist.env, method = "spearman", permutations = 999, na.rm = TRUE)
+        
+        g = cbind(coef=model$statistic, p=model$signif)
+        
+        g_1 <- cbind(data_env[i,], g)
+        models_env[[i]] <- g_1
+}
+fungi_root.env <- do.call(bind_rows, models_env) 
+
+models_geo <- list()
+for (i in 1:nrow(data_geo)) {
+        dist.1 = (fungi_root.list %>% filter(trt == data_comb[i,]$Var1) %>% dplyr::select(abund.dist))$abund.dist[[1]]
+        
+        model = mantel(dist.1, dist.geo, method = "spearman", permutations = 999, na.rm = TRUE)
+        
+        g = cbind(coef=model$statistic, p=model$signif)
+        
+        g_1 <- cbind(data_geo[i,], g)
+        models_geo[[i]] <- g_1
+}
+fungi_root.geo <- do.call(bind_rows, models_geo) 
+
+fungi_root.comb <- rbind.data.frame(fungi_root.mantel,fungi_root.env,fungi_root.geo)
+
+#write combined results
+mantel_test_results <- bind_rows('Rhizosphere bacteria' = bac_rhizo.comb, 'Root bacteria' = bac_root.comb,
+                                 'Rhizosphere fungi' = fungi_rhizo.comb, 'Root fungi' = fungi_root.comb, .id = 'group')
+
+write.csv(mantel_test_results, file = 'Mantel_test/Microbiome_mantel_test_results.csv', row.names = FALSE)
+```
+
+plot matrix correlation heatmap
+
+```{r cor}
+mantel_test_results<- read.csv(file = 'Mantel_test/Microbiome_mantel_test_results.csv', header = TRUE)
+mantel_test_results$Var2 <- factor(mantel_test_results$Var2,
+                                   levels = c("CK", "D", "LN", "LP", "Elevation", "Geographic_dist"),
+                                   labels = c("CK", "D", "LN", "LP", "Elevation", "Geographical\ndistance"))
+# Heatmap
+plot <- ggplot(data = mantel_test_results, aes(Var2, Var1, fill = coef))+
+ geom_tile(color = "white")+
+ geom_text(aes(label = p), size =4) +
+  facet_wrap( ~ group, ncol = 2) + 
+ scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0,  space = "Lab", breaks = c(0,0.5, 1),
+   name="Correlation") +
+  #labs(title = 'Correlation')+
+  theme_minimal()+ 
+ theme(axis.text.x = element_text(angle = 90, vjust = 1, size =14, hjust = 1, color = 'black'),
+       axis.text.y = element_text( vjust = 1, size = 14, hjust = 1, color = 'black'),
+       axis.title = element_blank(),
+       #plot.title = element_text(size = 8),
+       strip.text = element_text(size = 14, color = 'black', face = 'bold'),
+       legend.title = element_blank(),
+       legend.text = element_text(size = 14, color = 'black'),
+       panel.grid.major = element_blank(),
+  panel.border = element_blank(),
+  panel.background = element_blank())+
+ coord_fixed()
+plot
+
+ggsave(plot, filename = 'Mantel_test/Mantel_correlation_plot.pdf', width = 12, height = 10, units = 'cm')
+
+```
